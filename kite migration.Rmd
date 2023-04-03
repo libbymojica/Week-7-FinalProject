@@ -1,0 +1,162 @@
+---
+title: "Visualization of Kite Species"
+author: "LM"
+date: "2023-03-25"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## setup
+```{r}
+source("setup.R")
+```
+
+
+## Create a state layer to use with the kite data
+```{r}
+state_kite <- tigris::counties(state = c('01','12', '13', '28', '22', '45'))
+#AL=01, Florida is '12', Georgia is '13', Mississippi is '28', Louisiana is '22', South Carolina is '45'
+class(state_kite) #yes is spatial object
+crs(state_kite) #yes in NAD83
+```
+
+
+## Get SNKI species occurance data
+
+```{r}
+#make a string of species names to use in the 'occ_data' function
+species <- c("Elanoides forficatus", "Ictinia mississippiensis", "Rostrhamus sociabilis")
+
+#also make a string of common names
+common_name <- c("Swallow-tailed Kite", "Mississippi Kite", "Snail Kite")
+
+#create an empty list to store each species data
+output_floop <- vector("list", length = length(species))
+
+#create function to run in the for loop
+gbifPULL_function <- function(species){
+  
+#Pull data:  
+  occ_kite <-
+    occ_data(
+      scientificName = species,
+      hasCoordinate = TRUE, #we only want data with spatial coordinates
+      geometry = st_bbox(state_kite),
+      limit = 10000 #optional set an upper limit for total occurrences to download
+    ) %>%
+    .$data #return just the data frame. The '.' symbolizes the previous function's output. 
+
+  # add species name column as ID to use later
+  occ_kite$ID <- common_name[i]
+  
+  #clean by removing duplicate occurrences
+  occ_kite <-
+    occ_kite %>% distinct(decimalLatitude, decimalLongitude, .keep_all = TRUE) %>%
+    dplyr::select(Species = ID,
+                  decimalLatitude,
+                  decimalLongitude,
+                  year,
+                  month,
+                  basisOfRecord) 
+  
+  return(occ_kite)
+}
+
+for(i in 1:length(species)){
+  
+  output_floop[[i]] <-
+    gbifPULL_function(species = species[i])
+  
+}
+
+summary(output_floop)
+multi_kite <- dplyr::bind_rows(output_floop)
+
+```
+## Make a spatial object
+
+```{r}
+multi_kite_sf <- st_as_sf(multi_kite, coords = c("decimalLongitude", "decimalLatitude" ), crs = 4326)
+
+multi_kite_sf <- st_transform(multi_kite_sf, crs=st_crs(state_kite)) #yes is now in NAD83
+
+# Filter data to remove years prior to 2021
+multi_kite_sf <- multi_kite_sf %>%
+  filter(year >2020) 
+```
+
+```{r}
+multi_kite_sf %>%
+  group_by(Species, year) %>%
+  
+```
+
+
+```{r}
+tmap_mode("plot")
+```
+
+## Map 1 Kite species on map
+```{r}
+tm_shape(state_kite) +
+  tm_polygons()+
+tm_shape(multi_kite_sf) +
+  tm_symbols(col = "Species",
+             palette = "Set1",
+             alpha = 0.8,
+             size = 0.5) +
+  tm_layout(frame = FALSE,
+            legend.outside = TRUE,
+            legend.outside.position = "bottom")
+```
+
+
+```{r}
+save(state_kite, multi_kite_sf, file = "Migration_shiny/kite_data.RData")
+```
+
+
+## Map 2 Shows bubble sizes on map for total kite occurances
+```{r}
+
+state_kite$occurance_count <- lengths(st_intersects(state_kite, multi_kite_sf)) #counts the number of kites in each county
+
+
+tm_shape(state_kite) +
+  tm_polygons() +
+  tm_bubbles(size = "occurance_count",
+             col = "red",
+             title.size = "Kite Species Occurrences 2021-2023") +
+  tm_layout(frame = FALSE,
+            legend.outside = TRUE,
+            legend.outside.position = "bottom")
+```
+
+## Map 3
+```{r}
+tm_shape(state_kite) +
+  tm_polygons() +
+tm_shape(multi_kite_sf) +
+  tm_facets(by = "Species", free.coords = FALSE) +
+  tm_symbols(col = "Species", palette = c("blue", "orange", "red"),
+             alpha = 0.5) +
+  tm_layout(legend.show = FALSE)
+  
+```
+
+
+```{r}
+occ_react <- reactive(
+        multi_kite_sf %>%
+            filter(Species %in% input$species) %>%
+            filter(basisOfRecord %in% input$obs) %>%
+            filter(month >= input$month[1] &
+                       month <= input$month[2])
+    )
+```
+
